@@ -1,0 +1,22 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# SQLite DB
+*.db
+
+# Raw / Heavy data
+data/raw/
+data/netkeiba/
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PyCharm / VSCode
+.idea/
+.vscode/
