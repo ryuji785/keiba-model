@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.etl_logging import logger  # noqa: E402
+from etl_common import logger  # noqa: E402
 from scripts.crawl_jra_calendar import fetch_calendar_and_save  # noqa: E402
 from scripts.crawl_jra_race_list import crawl_race_list  # noqa: E402
 from scripts.fetch_jra_html import fetch_race_html  # noqa: E402
