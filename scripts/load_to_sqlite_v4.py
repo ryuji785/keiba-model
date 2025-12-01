@@ -1,10 +1,14 @@
-# scripts/load_to_sqlite_v4.py
+"""
+Load layer for v4 schema: races, race_results, horses, jockeys, trainers.
+"""
+from __future__ import annotations
+
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Any
-logger = logging.getLogger(__name__)
+from typing import Any, Dict, List
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = "data/keiba.db"
 
@@ -17,22 +21,7 @@ def _get_connection(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def _ensure_course(conn: sqlite3.Connection, course_id: str | None) -> None:
-    if not course_id:
-        return
-    sql = """
-        INSERT OR IGNORE INTO courses (
-            course_id, venue_id, course_name, surface, track_type, straight_len, slope_max, features_text
-        ) VALUES (?, NULL, ?, NULL, NULL, NULL, NULL, NULL)
-    """
-    conn.execute(sql, (course_id, course_id))
-
-
-def _ensure_course_exists(conn: sqlite3.Connection, race: Dict[str, Any]) -> None:
-    """
-    Guarantee the course row exists before inserting into races (FK constraint safety).
-    Falls back to provisional values when absent.
-    """
+def _ensure_course(conn: sqlite3.Connection, race: Dict[str, Any]) -> None:
     course_id = race.get("course_id")
     if not course_id:
         return
@@ -48,79 +37,45 @@ def _ensure_course_exists(conn: sqlite3.Connection, race: Dict[str, Any]) -> Non
     conn.execute(sql, (course_id, venue_id, course_name, surface))
 
 
-def _upsert_horses(conn: sqlite3.Connection, horses: Dict[str, Dict[str, Any]]) -> None:
+def _insert_horses(conn: sqlite3.Connection, horses: Dict[str, Dict[str, Any]]) -> None:
     if not horses:
         return
-    sql = """
-        INSERT OR IGNORE INTO horses (horse_id, horse_name, sex, birth_year)
-        VALUES (?, ?, ?, ?)
-    """
+    sql = "INSERT OR IGNORE INTO horses (horse_id, horse_name, sex, birth_year) VALUES (?, ?, ?, ?)"
     for horse_id, info in horses.items():
-        conn.execute(
-            sql,
-            (
-                horse_id,
-                info.get("horse_name"),
-                info.get("sex"),
-                info.get("birth_year"),
-            ),
-        )
+        conn.execute(sql, (horse_id, info.get("horse_name"), info.get("sex"), info.get("birth_year")))
 
 
-def _upsert_jockeys(conn: sqlite3.Connection, jockeys: Dict[str, Dict[str, Any]]) -> None:
+def _insert_jockeys(conn: sqlite3.Connection, jockeys: Dict[str, Dict[str, Any]]) -> None:
     if not jockeys:
         return
-    sql = """
-        INSERT OR IGNORE INTO jockeys (jockey_id, jockey_name)
-        VALUES (?, ?)
-    """
+    sql = "INSERT OR IGNORE INTO jockeys (jockey_id, jockey_name) VALUES (?, ?)"
     for jockey_id, info in jockeys.items():
         conn.execute(sql, (jockey_id, info.get("jockey_name")))
 
 
-def _upsert_trainers(conn: sqlite3.Connection, trainers: Dict[str, Dict[str, Any]]) -> None:
+def _insert_trainers(conn: sqlite3.Connection, trainers: Dict[str, Dict[str, Any]]) -> None:
     if not trainers:
         return
-    sql = """
-        INSERT OR IGNORE INTO trainers (trainer_id, trainer_name)
-        VALUES (?, ?)
-    """
+    sql = "INSERT OR IGNORE INTO trainers (trainer_id, trainer_name) VALUES (?, ?)"
     for trainer_id, info in trainers.items():
         conn.execute(sql, (trainer_id, info.get("trainer_name")))
 
 
 def _upsert_race(conn: sqlite3.Connection, race: Dict[str, Any]) -> None:
-    # v4 schema mandatory keys
     mandatory = ["race_id", "date", "course_id", "race_no", "distance", "surface"]
     if not all(k in race for k in mandatory):
-        logger.warning("race_dict is missing mandatory keys, skip races insert: %s", race)
+        logger.warning("race_dict missing keys, skip races insert: %s", race)
         return
     if any(race.get(k) is None for k in mandatory):
         logger.warning("race_dict has None mandatory values, skip races insert: %s", race)
         return
 
     sql = """
-        INSERT INTO races (
+        INSERT OR REPLACE INTO races (
             race_id, date, course_id, race_no, race_name,
             distance, surface, weather, going, class,
             age_cond, sex_cond, num_runners, win_time_sec, race_type
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(race_id) DO UPDATE SET
-            date=excluded.date,
-            course_id=excluded.course_id,
-            race_no=excluded.race_no,
-            race_name=excluded.race_name,
-            distance=excluded.distance,
-            surface=excluded.surface,
-            weather=excluded.weather,
-            going=excluded.going,
-            class=excluded.class,
-            age_cond=excluded.age_cond,
-            sex_cond=excluded.sex_cond,
-            num_runners=excluded.num_runners,
-            win_time_sec=excluded.win_time_sec,
-            race_type=excluded.race_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     params = (
         race.get("race_id"),
@@ -140,13 +95,11 @@ def _upsert_race(conn: sqlite3.Connection, race: Dict[str, Any]) -> None:
         race.get("race_type", "FLAT"),
     )
     conn.execute(sql, params)
-    _ensure_course(conn, race.get("course_id"))
 
 
 def _upsert_race_results(conn: sqlite3.Connection, results: List[Dict[str, Any]]) -> None:
     if not results:
         return
-    # filter out rows missing primary key parts
     filtered: List[Dict[str, Any]] = []
     skipped_idx: List[int] = []
     for i, r in enumerate(results):
@@ -195,7 +148,6 @@ def _upsert_race_results(conn: sqlite3.Connection, results: List[Dict[str, Any]]
             prev_last_3f=excluded.prev_last_3f,
             days_since_last=excluded.days_since_last
     """
-
     for row in results:
         params = (
             row.get("race_id"),
@@ -234,28 +186,18 @@ def load_race_to_db(
     trainers_dict: Dict[str, Dict[str, Any]],
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """
-    v4 スキーマの SQLite DB に 1レース分のデータをロードする。
-    races / race_results / horses / jockeys / trainers を対象とする。
-    """
-    logger.info("Start load_race_to_db for race_id=%s", race_dict.get("race_id"))
-
+    logger.info("Start load_race_to_db race_id=%s", race_dict.get("race_id"))
     conn = _get_connection(db_path)
     try:
         conn.execute("BEGIN")
-        _ensure_course_exists(conn, race_dict)
-        _upsert_horses(conn, horses_dict)
-        _upsert_jockeys(conn, jockeys_dict)
-        _upsert_trainers(conn, trainers_dict)
-        if race_dict:
-            _upsert_race(conn, race_dict)
+        _ensure_course(conn, race_dict)
+        _insert_horses(conn, horses_dict)
+        _insert_jockeys(conn, jockeys_dict)
+        _insert_trainers(conn, trainers_dict)
+        _upsert_race(conn, race_dict)
         _upsert_race_results(conn, results_list)
         conn.commit()
-        logger.info(
-            "Finished load_race_to_db for race_id=%s (results=%d)",
-            race_dict.get("race_id"),
-            len(results_list),
-        )
+        logger.info("Finished load_race_to_db race_id=%s (results=%d)", race_dict.get("race_id"), len(results_list))
     except Exception:
         conn.rollback()
         logger.exception("Error while loading race_id=%s", race_dict.get("race_id"))
