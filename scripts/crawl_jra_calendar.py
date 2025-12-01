@@ -51,7 +51,15 @@ def _extract_kaisaibi_cnames(soup: BeautifulSoup) -> Dict[str, str]:
 def fetch_calendar_and_save(year: int, month: int) -> Dict[str, str]:
     """指定年月のカレンダーを取得し、開催日 CNAME を返す。"""
     url = f"{CAL_BASE_URL}{year:04d}{month:02d}.html"
-    html = fetch_html(url)
+    cache_path = CAL_RAW_DIR / f"{year:04d}{month:02d}.html"
+    if cache_path.exists():
+        html = cache_path.read_text(encoding="utf-8")
+        logger.info("Loaded calendar from cache: %s", cache_path)
+    else:
+        html = fetch_html(url)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(html, encoding="utf-8")
+        logger.info("Fetched and cached calendar: %s", cache_path)
     soup = BeautifulSoup(html, "html.parser")
 
     cnames = _extract_kaisaibi_cnames(soup)

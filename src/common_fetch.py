@@ -17,6 +17,12 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 )
 
+EXTRA_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "ja,en-US;q=0.7,en;q=0.3",
+    "Referer": "https://www.jra.go.jp/",
+}
+
 
 def _decode_response(resp: requests.Response) -> str:
     if resp.encoding:
@@ -40,7 +46,7 @@ def get_soup(url: str, *, timeout: int = 15, headers: Optional[dict] = None) -> 
     - Uses errors='ignore' to avoid decode errors
     - Raises for non-200 status codes
     """
-    h = {"User-Agent": USER_AGENT}
+    h = {"User-Agent": USER_AGENT, **EXTRA_HEADERS}
     if headers:
         h.update(headers)
 
@@ -56,7 +62,7 @@ def fetch_html(url: str, *, timeout: int = 15, headers: Optional[dict] = None) -
     """
     Fetch URL and return decoded HTML text (Shift_JIS-safe).
     """
-    h = {"User-Agent": USER_AGENT}
+    h = {"User-Agent": USER_AGENT, **EXTRA_HEADERS}
     if headers:
         h.update(headers)
     resp = requests.get(url, timeout=timeout, headers=h)
