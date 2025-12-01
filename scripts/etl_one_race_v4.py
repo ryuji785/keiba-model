@@ -9,9 +9,17 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-from etl_common import logger
-from parse_jra_race import parse_race_html
-from load_to_sqlite_v4 import load_race_to_db
+# add project root and src to sys.path
+ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from etl_common import logger  # noqa: E402
+from parse_jra_race import parse_race_html  # noqa: E402
+from load_to_sqlite_v4 import load_race_to_db  # noqa: E402
 
 
 def run_etl_for_one_race(html_path: Path | str, db_path: str) -> None:

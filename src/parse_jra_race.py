@@ -226,18 +226,17 @@ def _parse_results_table(soup: BeautifulSoup) -> pd.DataFrame:
     return df
 
 
-def parse_jra_race(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+def parse_jra_race(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     path = Path(html_path)
     if not path.exists():
         raise FileNotFoundError(f"HTML not found: {path}")
     race_id = _infer_race_id(path)
     html = _read_html_text(path)
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, "html.parser")
 
     race_info = _parse_race_overview(soup, race_id)
     df = _parse_results_table(soup)
 
-    # fill defaults
     distance = race_info.get("distance") or 0
     surface = race_info.get("surface") or "unknown"
     course_id = f"UNK_{surface}_{distance}"
@@ -262,6 +261,10 @@ def parse_jra_race(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Di
     }
 
     results_list: List[Dict[str, Any]] = []
+    horses_dict: Dict[str, Dict[str, Any]] = {}
+    jockeys_dict: Dict[str, Dict[str, Any]] = {}
+    trainers_dict: Dict[str, Dict[str, Any]] = {}
+
     for idx, row in df.iterrows():
         horse_name = str(row.get("horse_name", "")).strip()
         jockey_name = str(row.get("jockey_name", "")).strip()
@@ -274,6 +277,12 @@ def parse_jra_race(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Di
 
         finish_time = _parse_time_to_sec(row.get("time_str"))
         margin_sec = _parse_margin_to_sec(row.get("margin_str"))
+
+        horses_dict[horse_id] = {"horse_name": horse_name or None, "sex": row.get("sex"), "birth_year": None}
+        if jockey_id:
+            jockeys_dict[jockey_id] = {"jockey_name": jockey_name or None}
+        if trainer_id:
+            trainers_dict[trainer_id] = {"trainer_name": trainer_name or None}
 
         result = {
             "race_id": race_id,
@@ -306,4 +315,11 @@ def parse_jra_race(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Di
     if results_list and results_list[0].get("finish_time_sec") is not None:
         race_dict["win_time_sec"] = results_list[0]["finish_time_sec"]
 
-    return race_dict, results_list
+    return race_dict, results_list, horses_dict, jockeys_dict, trainers_dict
+
+
+def parse_race_html(html_path: Union[str, Path]) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """
+    Wrapper to match legacy API: returns race_dict, results_list, horses, jockeys, trainers.
+    """
+    return parse_jra_race(html_path)
