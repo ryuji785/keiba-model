@@ -1,13 +1,18 @@
 """
-Extract-only driver for a given date (YYYYMMDD).
-Flow: calendar -> kaisaibi -> race list -> race result HTML fetch for all races.
+Extract-only driver for a given date (YYYYMMDD) using past-links traversal.
+
+Flow:
+ 1. Given a target date (YYYYMMDD), call get_sde_cnames_for_date(date)
+    to obtain all race-result CNAMEs (pw01sde...).
+ 2. For each CNAME, fetch the race result HTML via fetch_race_html().
+ 3. Save HTML under data/raw/jra/race_html/.
 """
+
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
-from typing import List
 
 # add project root to sys.path
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,96 +20,69 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from etl_common import logger  # noqa: E402
-from scripts.crawl_jra_calendar import fetch_calendar_and_save  # noqa: E402
-from scripts.crawl_jra_race_list import crawl_race_list  # noqa: E402
-from scripts.fetch_jra_html import fetch_race_html  # noqa: E402
+from scripts.jra_past_links import get_sde_cnames_for_date  # noqa: E402
+from scripts.fetch_jra_race_html import fetch_race_html  # noqa: E402
 
 
 def extract_one_date(date_yyyymmdd: str, overwrite_html: bool = False) -> None:
-    year = int(date_yyyymmdd[:4])
-    month = int(date_yyyymmdd[4:6])
+    """
+    Extract all race result HTMLs for a given date (YYYYMMDD).
 
-    msg = f"[extract_one_date] === START date={date_yyyymmdd} (year={year}, month={month}) ==="
-    print(msg)
-    logger.info(msg)
+    Parameters
+    ----------
+    date_yyyymmdd : str
+        Target date (YYYYMMDD).
+    overwrite_html : bool, optional
+        If True, re-fetch and overwrite existing HTML files.
+    """
+    print(f"[extract_one_date] === START date={date_yyyymmdd} ===")
+    logger.info("extract_one_date START date=%s", date_yyyymmdd)
 
-    # ---- カレンダー取得 ----
-    print(f"[extract_one_date] fetching calendar for {year}-{month:02d} ...")
-    cnames_map = fetch_calendar_and_save(year, month)
+    # ---- CNAME一覧取得（過去レース結果ページ経由）----
+    print(f"[extract_one_date] resolving sde CNAMEs for date={date_yyyymmdd} ...")
+    sde_cnames = get_sde_cnames_for_date(date_yyyymmdd)
 
-    # cnames_map の概要
-    try:
-        n_keys = len(cnames_map)
-    except TypeError:
-        n_keys = -1
-    print(f"[extract_one_date] calendar cnames_map size={n_keys}")
-    logger.info("calendar cnames_map size=%s", n_keys)
-
-    # 指定日の開催日CNAMEを取得
-    kaisaibi_cname = cnames_map.get(date_yyyymmdd)
-    if not kaisaibi_cname:
-        msg = (
-            f"[extract_one_date] No kaisaibi CNAME found for date={date_yyyymmdd} "
-            f"(たぶん JRA の開催日ではない日)"
-        )
-        print(msg)
+    if not sde_cnames:
+        msg = f"No races found for date={date_yyyymmdd} (probably no JRA meeting)"
+        print(f"[extract_one_date] {msg}")
         logger.warning(msg)
         print("[extract_one_date] === END (no races) ===")
         return
 
-    print(f"[extract_one_date] kaisaibi CNAME for {date_yyyymmdd} = {kaisaibi_cname}")
-    logger.info("Found kaisaibi CNAME: %s", kaisaibi_cname)
+    total = len(sde_cnames)
+    print(f"[extract_one_date] Found {total} sde CNAMEs for date={date_yyyymmdd}")
+    logger.info("Found %d sde CNAMEs for date=%s", total, date_yyyymmdd)
 
-    # ---- レース一覧取得 ----
-    print(f"[extract_one_date] fetching race list for date={date_yyyymmdd} ...")
-    race_cnames: List[str] = crawl_race_list(kaisaibi_cname, date_yyyymmdd)
-
-    if not race_cnames:
-        msg = f"[extract_one_date] No race CNAMEs found for date={date_yyyymmdd}"
-        print(msg)
-        logger.warning(msg)
-        print("[extract_one_date] === END (no race cnames) ===")
-        return
-
-    total = len(race_cnames)
-    print(f"[extract_one_date] Found {total} race CNAMEs for {date_yyyymmdd}")
-    logger.info("Found %d race CNAMEs for %s", total, date_yyyymmdd)
-
-    skip = 0
     success = 0
+    skip = 0
     fail = 0
 
     # ---- 各レース HTML 取得 ----
-    for idx, cname in enumerate(race_cnames, start=1):
-        url = f"https://www.jra.go.jp/JRADB/accessS.html?CNAME={cname}"
-        print(f"[extract_one_date] [{idx}/{total}] Fetching race URL: {url}")
-        logger.info("Fetching race URL: %s", url)
+    for idx, cname in enumerate(sde_cnames, start=1):
+        print(f"[extract_one_date] [{idx}/{total}] fetching race html cname={cname}")
+        logger.info("Fetching race html cname=%s (%d/%d)", cname, idx, total)
 
         try:
             html_path = fetch_race_html(cname, overwrite=overwrite_html)
 
             if html_path is None:
+                # 既存ファイルがあり overwrite=False の場合など
                 print(f"[extract_one_date]  -> SKIP (already exists)")
-                logger.info("Skipped (already exists): %s", url)
+                logger.info("Skipped (already exists) cname=%s", cname)
                 skip += 1
                 continue
 
             print(f"[extract_one_date]  -> OK saved to {html_path}")
-            logger.info("Saved HTML: %s", html_path)
+            logger.info("Saved HTML for cname=%s path=%s", cname, html_path)
             success += 1
 
-        except Exception as e:
+        except Exception:
             fail += 1
-            print(f"[extract_one_date]  -> FAIL ({e})")
-            logger.exception(
-                "Failed to fetch cname=%s date=%s URL=%s",
-                cname,
-                date_yyyymmdd,
-                url,
-            )
+            print(f"[extract_one_date]  -> FAIL (see log)")
+            logger.exception("Failed to fetch race html cname=%s date=%s", cname, date_yyyymmdd)
             continue
 
-    # ---- 最終サマリー ----
+    # ---- サマリー ----
     summary = (
         f"[extract_one_date] === SUMMARY date={date_yyyymmdd} "
         f"total={total} success={success} skip={skip} fail={fail} ==="
@@ -123,7 +101,8 @@ def extract_one_date(date_yyyymmdd: str, overwrite_html: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract all race HTMLs for a given date (YYYYMMDD)."
+        description="Extract all race HTMLs for a given date (YYYYMMDD). "
+                    "Uses JRA 'Past race results search' navigation."
     )
     parser.add_argument("date", help="YYYYMMDD")
     parser.add_argument(
