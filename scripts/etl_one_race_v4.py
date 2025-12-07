@@ -22,10 +22,12 @@ from parse_jra_race import parse_race_html  # noqa: E402
 from load_to_sqlite_v4 import load_race_to_db  # noqa: E402
 
 
-def run_etl_for_one_race(html_path: Path | str, db_path: str) -> None:
-    """Run ETL for a single race HTML file."""
-    html_path = Path(html_path)
-    logger.info("ETL start: html=%s", html_path)
+def run_etl_for_one_race(race_id: str, db_path: str) -> None:
+    """Run ETL for a single race by race_id, reading data/raw/jra/race_<race_id>.html."""
+    html_path = Path("data/raw/jra") / f"race_{race_id}.html"
+    if not html_path.exists():
+        raise FileNotFoundError(f"HTML not found: {html_path}")
+    logger.info("ETL start: race_id=%s html=%s", race_id, html_path)
 
     race_dict: Dict[str, Any]
     results_list: List[Dict[str, Any]]
@@ -54,8 +56,8 @@ def run_etl_for_one_race(html_path: Path | str, db_path: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run ETL for one JRA race (v4 schema) from HTML file.")
-    parser.add_argument("html", help="Path to saved race HTML")
+    parser = argparse.ArgumentParser(description="Run ETL for one JRA race (v4 schema) by race_id.")
+    parser.add_argument("race_id", help="12-digit race ID (e.g., 202405020811)")
     parser.add_argument(
         "--db",
         type=str,
@@ -65,9 +67,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        run_etl_for_one_race(args.html, db_path=args.db)
+        run_etl_for_one_race(args.race_id, db_path=args.db)
     except Exception:
-        logger.exception("ETL failed for html=%s", args.html)
+        logger.exception("ETL failed for race_id=%s", args.race_id)
         sys.exit(1)
 
 

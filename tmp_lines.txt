@@ -20,14 +20,10 @@ JP_DIRT = "\u30c0\u30fc\u30c8"
 
 
 def _read_html_text(path: Path) -> str:
-    data = path.read_bytes()
-    # Prefer CP932/Shift_JIS (JRA公式はほぼSJIS) and fall back to UTF-8.
-    for enc in ("cp932", "shift_jis", "utf-8"):
-        try:
-            return data.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return data.decode("utf-8", errors="ignore")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="shift_jis", errors="ignore")
 
 
 def _infer_race_id(html_path: Path) -> str:
@@ -71,102 +67,20 @@ def _parse_margin_to_sec(margin: str | None) -> float | None:
     if not isinstance(margin, str):
         return None
     txt = margin.strip()
-    if not txt or txt in ['-', '']:
+    if not txt or txt in ["-", ""]:
         return None
-    txt = txt.translate(str.maketrans("???????????????", "0123456789./---"))
-    txt = txt.replace(' ', '')
-
-    # numeric-like value
     try:
         return float(txt)
     except ValueError:
         pass
-
-    base = 0.2  # rough seconds per 1??
     mapping = {
-        '??': 0.05,
-        '?': 0.05,
-        '???': 0.15,
-        '??': 0.1,
-        '???': base * 0.5,
-        '1/4': base * 0.25,
-        '1/2': base * 0.5,
-        '3/4': base * 0.75,
-        '??': None,
+        "\u30cf\u30ca": 0.1,  # ハナ
+        "\u30af\u30d3": 0.2,  # クチE        "\u534a\u99ac\u8eab": 0.3,  # 半馬身
+        "1/2": 0.3,
     }
     for k, v in mapping.items():
         if k in txt:
             return v
-
-    m_mixed = re.match(r"(\d+(?:\.\d+)?)\s*(1/2|3/4)", txt)
-    if m_mixed:
-        lengths = float(m_mixed.group(1)) + (0.5 if m_mixed.group(2) == '1/2' else 0.75)
-        return lengths * base
-
-    m_len = re.match(r"([0-9]+(?:\.[0-9]+)?)\s*??", txt)
-    if m_len:
-        return float(m_len.group(1)) * base
-    return None
-
-
-    # numeric-like value
-    try:
-        return float(txt)
-    except ValueError:
-        pass
-
-    base = 0.2  # rough seconds per 1??
-    mapping = {
-        "??": 0.05,
-        "?": 0.05,
-        "???": 0.15,
-        "??": 0.1,
-        "???": base * 0.5,
-        "1/4": base * 0.25,
-        "1/2": base * 0.5,
-        "3/4": base * 0.75,
-        "??": None,
-    }
-    for k, v in mapping.items():
-        if k in txt:
-            return v
-
-    m_mixed = re.match(r"(\d+(?:\.\d+)?)\s*(1/2|3/4)", txt)
-    if m_mixed:
-        lengths = float(m_mixed.group(1)) + (0.5 if m_mixed.group(2) == "1/2" else 0.75)
-        return lengths * base
-
-    m_len = re.match(r"([0-9]+(?:\.[0-9]+)?)\s*??", txt)
-    if m_len:
-        return float(m_len.group(1)) * base
-    return None
-
-
-    # numeric-like value
-    try:
-        return float(txt)
-    except ValueError:
-        pass
-
-    base = 0.2  # rough seconds per 1??
-    mapping = {
-        "ハナ": 0.05,  # ??
-        "鼻": 0.05,  # ?
-        "アタマ": 0.15,  # ???
-        "クビ": 0.1,  # ??
-        "半馬身": base * 0.5,
-        "1/4": base * 0.25,
-        "1/2": base * 0.5,
-        "3/4": base * 0.75,
-        "大差": None,  # ??
-    }
-    for k, v in mapping.items():
-        if k in txt:
-            return v
-
-    m_len = re.match(r"([0-9]+(?:\.[0-9]+)?)\s*馬身", txt)
-    if m_len:
-        return float(m_len.group(1)) * base
     return None
 
 
@@ -239,43 +153,37 @@ def _parse_race_overview(soup: BeautifulSoup, race_id: str) -> Dict[str, Any]:
         ("G1", "G1"),
         ("G2", "G2"),
         ("G3", "G3"),
-        ("\u30aa\u30fc\u30d7\u30f3\u7279\u5225", "OPEN"),
         ("\u30aa\u30fc\u30d7\u30f3", "OPEN"),
+        ("\u30aa\u30fc\u30d7\u30f3\u7279\u5225", "OPEN"),
         ("\u7279\u5225", "OP"),
         ("\u65b0\u99ac", "NEW"),
         ("\u672a\u52dd\u5229", "MAIDEN"),
-        ("1\u52dd\u30af\u30e9\u30b9", "1-WIN"),
-        ("2\u52dd\u30af\u30e9\u30b9", "2-WIN"),
-        ("3\u52dd\u30af\u30e9\u30b9", "3-WIN"),
     ]
     for pat, label in cls_candidates:
         if pat in header_text:
             info["class"] = label
             break
     if info["class"] is None:
-        m_cls = re.search(r"(\d)\u52dd", header_text)
+        m_cls = re.search(r"(\d)\u52dd\u30af\u30e9\u30b9", header_text)
         if m_cls:
             info["class"] = f"{m_cls.group(1)}-WIN"
 
     # age condition
-    m_age = re.search(r"(\d+)[\u6b73\u624d]\u4ee5\u4e0a", header_text)
+    m_age = re.search(r"(\d)[\u6b73\u624d]\u4ee5\u4e0a", header_text)
     if m_age:
         info["age_cond"] = f"{m_age.group(1)}YO+"
     else:
-        m_age2 = re.search(r"(\d+)[\u6b73\u624d]", header_text)
+        m_age2 = re.search(r"(\d)[\u6b73\u624d]", header_text)
         if m_age2:
             info["age_cond"] = f"{m_age2.group(1)}YO"
 
     # sex condition
-    sex_flags = []
-    if re.search(r"\u725b", header_text):
-        sex_flags.append("MALE")
-    if re.search(r"\u54c1", header_text):
-        sex_flags.append("FEMALE")
-    if re.search(r"\u30bb\u30f3|\u9a19", header_text):
-        sex_flags.append("MALE")
-    if sex_flags:
-        info["sex_cond"] = "MIX" if len(set(sex_flags)) > 1 else sex_flags[0]
+    if "\u54c1\u99ac" in header_text or "\u54c1" in header_text:
+        info["sex_cond"] = "FEMALE"
+    if "\u725b\u99ac" in header_text or "\u725b" in header_text:
+        info["sex_cond"] = "MALE"
+    if "\u725b\u30fb\u54c1" in header_text or "\u725b\u54c1" in header_text or "\u725b\u30fb\u54c1\u99ac" in header_text:
+        info["sex_cond"] = "MIX"
 
     return info
 
@@ -302,90 +210,59 @@ def _parse_results_table(soup: BeautifulSoup) -> pd.DataFrame:
         logger.warning("pandas.read_html failed on result table")
         return pd.DataFrame()
 
-    def _norm_col(col: Any) -> str:
-        s = str(col)
-        for ch in [" ", "　", " ", "﻿"]:
-            s = s.replace(ch, "")
-        return s
-
-    col_map: Dict[Any, str] = {}
+    col_map = {}
     for col in df.columns:
-        norm = _norm_col(col)
-        if "??" in norm or norm == "?":
+        norm = str(col).replace(" ", "").replace("\u3000", "")
+        if "着頁E in norm:
             col_map[col] = "finish_rank"
-        elif norm in {"?", "??"}:
+        elif norm in {"枠", "枠番"}:
             col_map[col] = "bracket_no"
-        elif "??" in norm:
+        elif "馬番" in norm:
             col_map[col] = "horse_no"
-        elif "??" in norm:
+        elif "馬吁E in norm:
             col_map[col] = "horse_name"
-        elif "??" in norm:
+        elif "性齢" in norm:
             col_map[col] = "sex_age"
-        elif "??" in norm:
+        elif "斤釁E in norm:
             col_map[col] = "weight"
-        elif "??" in norm:
+        elif "騎手" in norm:
             col_map[col] = "jockey_name"
-        elif "???" in norm or "??" in norm or "??" in norm:
+        elif "タイム" in norm:
             col_map[col] = "time_str"
-        elif "??" in norm:
+        elif "着差" in norm:
             col_map[col] = "margin_str"
-        elif "??" in norm or "???" in norm or "????" in norm:
+        elif "通過" in norm:
             col_map[col] = "corner_pass_order"
-        elif (
-            "???" in norm
-            or "??" in norm
-            or "???3F" in norm
-            or "?????" in norm
-            or "????" in norm
-        ):
+        elif "上り" in norm:
             col_map[col] = "last_3f"
-        elif "??" in norm:
+        elif "推定上り" in norm:
+            col_map[col] = "last_3f"
+        elif "単勝" in norm:
             col_map[col] = "odds"
-        elif "??" in norm:
+        elif "人氁E in norm:
             col_map[col] = "popularity"
-        elif "???" in norm:
+        elif "馬体重" in norm:
             col_map[col] = "body_weight_raw"
-        elif "???" in norm:
+        elif "調教師" in norm:
             col_map[col] = "trainer_name"
     if col_map:
         df = df.rename(columns=col_map)
 
-    def _clean_corner(val: Any) -> str | None:
-        if pd.isna(val):
-            return None
-        s = str(val).strip()
-        if not s or s.lower() == "nan":
-            return None
-        s = s.translate(str.maketrans("?,????", "//------"))
-        s = re.sub(r"[^0-9/\-]", "", s)
-        s = s.replace("/", "-")
-        s = re.sub(r"-+", "-", s)
-        return s or None
-
+    # clean corner_pass_order (remove spaces/zenkaku)
     if "corner_pass_order" in df.columns:
-        df["corner_pass_order"] = df["corner_pass_order"].apply(_clean_corner)
+        df["corner_pass_order"] = (
+            df["corner_pass_order"].astype(str).str.replace(r"\s+", "", regex=True).replace({"nan": None})
+        )
 
     if "sex_age" in df.columns:
-        se = df["sex_age"].astype(str).str.extract(r"([????])\s*(\d+)")
+        se = df["sex_age"].astype(str).str.extract(r"([\u725b\u725d\u30bb\u9a19])\s*(\d+)")
         df["sex"] = se[0]
         df["age"] = pd.to_numeric(se[1], errors="coerce").astype("Int64")
 
     if "body_weight_raw" in df.columns:
-        w = df["body_weight_raw"].astype(str).str.extract(r"(\d+)\s*\(([+\-−]?\d+)\)")
+        w = df["body_weight_raw"].astype(str).str.extract(r"(\d+)\s*\(([+\-\u2212]?\d+)\)")
         df["body_weight"] = pd.to_numeric(w[0], errors="coerce").astype("Int64")
         df["body_weight_diff"] = pd.to_numeric(w[1], errors="coerce").astype("Int64")
-
-    if "last_3f" in df.columns:
-        def _clean_last(val: Any) -> float | None:
-            if pd.isna(val):
-                return None
-            s = str(val).strip()
-            if not s or s.lower() == "nan":
-                return None
-            s = s.translate(str.maketrans("???????????", "0123456789."))
-            s = re.sub(r"[^0-9\.]", "", s)
-            return float(s) if s else None
-        df["last_3f"] = df["last_3f"].apply(_clean_last)
 
     return df
 

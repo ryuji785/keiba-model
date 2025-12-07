@@ -33,17 +33,18 @@ _SESSION = requests.Session()
 
 def _choose_encoding(resp: requests.Response, explicit: Optional[str]) -> str:
     """
-    実際に使うエンコーディングを決める。
+    Decide encoding with JRA-friendly defaults.
     - explicit が指定されていればそれを優先
-    - そうでなければ apparent_encoding → encoding → 'cp932' の順
+    - そうでなければ cp932 (Shift_JIS) を最優先で試す
+    - それでも不明なら apparent_encoding → encoding の順
     """
     if explicit:
         return explicit
 
-    # JRA カレンダーのように meta は Shift_JIS だが中身は UTF-8 っぽいケースもあるので
-    # サーバ指定より apparent_encoding を優先する
-    enc = resp.apparent_encoding or resp.encoding or "cp932"
-    return enc
+    # 多くの JRA ページは Shift_JIS/CP932 前提
+    if resp.encoding and resp.encoding.lower() in {"shift_jis", "cp932", "shift-jis"}:
+        return resp.encoding
+    return resp.apparent_encoding or resp.encoding or "cp932"
 
 
 def _decode_response(resp: requests.Response, encoding: Optional[str]) -> str:

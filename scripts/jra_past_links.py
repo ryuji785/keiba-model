@@ -1,157 +1,150 @@
 """
-Utilities for parsing JRA 'Past race results search' page.
-
-Currently provides:
-- parse_race_day_entries(html) -> List[Dict[str, str]]
-
-Each entry has:
-    {
-        "date_yyyymmdd": "20240406",
-        "course_name":   "Fukushima",
-        "course_label_raw": "福島",
-        "srl_cname":     "pw01srl20240406",
-    }
+Traverse past race search to obtain pw01srl and pw01sde CNAME lists.
 """
-
 from __future__ import annotations
 
-from typing import List, Dict, Optional, Set, Tuple
-import logging
+import json
 import re
+from pathlib import Path
+from typing import Dict, List
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
-logger = logging.getLogger(__name__)
+from scripts.etl_common import decode_shift_jis, http_post, logger
 
-# 日本語 → 英語コース名マップ
-COURSE_NAME_MAP: Dict[str, str] = {
-    "東京": "Tokyo",
-    "京都": "Kyoto",
-    "中山": "Nakayama",
-    "阪神": "Hanshin",
-    "福島": "Fukushima",
-    "札幌": "Sapporo",
-    "函館": "Hakodate",
-    "新潟": "Niigata",
-    "小倉": "Kokura",
-    "中京": "Chukyo",
-}
-
-# pw01srlYYYYMMDD を拾うためのパターン
-SRL_CNAME_RE = re.compile(r"pw01srl(\d{8})")
-ONCLICK_SRL_RE = re.compile(r"doAction\([^,]+,\s*'(?P<cname>pw01srl\d{8})'\s*\)")
-HREF_SRL_RE = re.compile(r"CNAME=(?P<cname>pw01srl\d{8})")
+BASE_URL = "https://www.jra.go.jp/JRADB/accessS.html"
+CHECKDIGIT_CACHE = Path("data/raw/jra/checkdigits.json")
 
 
-def _extract_srl_cname_from_tag(tag: Tag) -> Optional[str]:
-    """タグの onclick / href から pw01srlYYYYMMDD を取り出す。"""
-    onclick = tag.get("onclick")
-    if onclick:
-        m = ONCLICK_SRL_RE.search(onclick)
-        if m:
-            return m.group("cname")
-
-    href = tag.get("href")
-    if href:
-        m = HREF_SRL_RE.search(href)
-        if m:
-            return m.group("cname")
-
-    return None
-
-
-def _find_course_label_raw(tag: Tag) -> Optional[str]:
+def fetch_yymm_checkdigit_dict() -> Dict[str, str]:
     """
-    そのボタン/リンクの「近く」にある日本語コース名（東京/京都/…）を推定する。
+    Fetch yymm -> checkdigit mapping by posting to pw01skl00999999/B3.
+    Cached locally to avoid repeated network calls.
     """
-    candidates: List[Tag] = []
-    if isinstance(tag, Tag):
-        candidates.append(tag)
-        for ancestor in list(tag.parents)[:5]:
-            if isinstance(ancestor, Tag):
-                candidates.append(ancestor)
+    if CHECKDIGIT_CACHE.exists():
+        try:
+            return json.loads(CHECKDIGIT_CACHE.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to load cache: %s", CHECKDIGIT_CACHE)
 
-    for node in candidates:
-        text = node.get_text(" ", strip=True)
-        if not text:
-            continue
+    resp = http_post(BASE_URL, data={"cname": "pw01skl00999999/B3"})
+    html = decode_shift_jis(resp.content)
+    # Example in the page:
+    # var objParam = new Array();objParam["2501"]="3F";objParam["2502"]="0D"; ...
+    pattern = re.compile(r'objParam\["(\d{4})"\]\s*=\s*"([0-9A-Z]{1,2})"')
+    mapping: Dict[str, str] = {}
+    for m in pattern.finditer(html):
+        yymm, chk = m.group(1), m.group(2)
+        mapping[yymm] = chk
 
-        for jp_name in COURSE_NAME_MAP.keys():
-            if jp_name in text:
-                return jp_name
+    if mapping:
+        CHECKDIGIT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        CHECKDIGIT_CACHE.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+        logger.info("Saved checkdigit cache: %s", CHECKDIGIT_CACHE)
+        return mapping
 
-    return None
+    # fallback: keep empty but log snippet for debugging
+    dump_path = CHECKDIGIT_CACHE.with_suffix(".html")
+    dump_path.write_text(html, encoding="utf-8", errors="ignore")
+    logger.warning("No yymm/checkdigit mapping found; dumped response to %s", dump_path)
+    return {}
 
 
-def parse_race_day_entries(html: str) -> List[Dict[str, str]]:
+def get_srl_cnames(year: int, month: int) -> List[str]:
     """
-    '過去の競走成績検索' ページの HTML から race_day_entries を抽出。
+    Build pw01skl10YYYYMM/<chk> and extract pw01srl... cnames.
     """
+    mapping = fetch_yymm_checkdigit_dict()
+    yyyymm = f"{year}{month:02d}"
+    yymm = yyyymm[2:]
+    chk = mapping.get(yymm)
+    if not chk:
+        logger.warning("No checkdigit found for yymm=%s", yymm)
+        return []
+
+    cname = f"pw01skl10{yyyymm}/{chk}"
+    resp = http_post(BASE_URL, data={"cname": cname})
+    html = decode_shift_jis(resp.content)
     soup = BeautifulSoup(html, "html.parser")
 
-    srl_tags: List[Tag] = []
+    cnames: List[str] = []
+    for a in soup.find_all("a", href=True):
+        if "pw01srl" in a["href"]:
+            cnames.append(a["href"].split("CNAME=")[-1])
 
+    onclick_pat = re.compile(r"pw01srl[^'\" >]+")
     for tag in soup.find_all(onclick=True):
-        if "pw01srl" in tag.get("onclick", ""):
-            srl_tags.append(tag)
+        onclick = tag.get("onclick", "")
+        for m in onclick_pat.finditer(onclick):
+            cnames.append(m.group(0))
 
-    for tag in soup.find_all("a", href=True):
-        if "CNAME=pw01srl" in tag.get("href", ""):
-            srl_tags.append(tag)
+    seen = set()
+    uniq: List[str] = []
+    for c in cnames:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
 
-    entries: List[Dict[str, str]] = []
-    seen: Set[Tuple[str, str]] = set()
 
-    for tag in srl_tags:
-        srl_cname = _extract_srl_cname_from_tag(tag)
-        if not srl_cname:
+def get_sde_cnames_for_date(date_yyyymmdd: str) -> List[str]:
+    """
+    For a specific date (YYYYMMDD), traverse srl -> sde and return sde CNAME list.
+    """
+    year = int(date_yyyymmdd[:4])
+    month = int(date_yyyymmdd[4:6])
+    srl_list = get_srl_cnames(year, month)
+    if not srl_list:
+        return []
+
+    sde_cnames: List[str] = []
+    for srl in srl_list:
+        matches = re.findall(r"(?=(\d{8}))", srl)  # overlapping to capture trailing date
+        target_in_srl = matches[-1] if matches else None
+        if target_in_srl != date_yyyymmdd:
             continue
+        resp = http_post(BASE_URL, data={"cname": srl})
+        html = decode_shift_jis(resp.content)
+        soup = BeautifulSoup(html, "html.parser")
 
-        m = SRL_CNAME_RE.search(srl_cname)
-        if not m:
-            continue
+        for a in soup.find_all("a", href=True):
+            if "pw01sde" in a["href"]:
+                sde_cnames.append(a["href"].split("CNAME=")[-1])
+        onclick_pat = re.compile(r"pw01sde[^'\" >]+")
+        for tag in soup.find_all(onclick=True):
+            onclick = tag.get("onclick", "")
+            for m2 in onclick_pat.finditer(onclick):
+                sde_cnames.append(m2.group(0))
 
-        date_yyyymmdd = m.group(1)
-
-        course_label_raw = _find_course_label_raw(tag)
-        if not course_label_raw:
-            logger.debug("Could not find course_label_raw for %s", srl_cname)
-            continue
-
-        course_name = COURSE_NAME_MAP.get(course_label_raw, course_label_raw)
-
-        key = (date_yyyymmdd, course_label_raw)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        entries.append(
-            {
-                "date_yyyymmdd": date_yyyymmdd,
-                "course_name": course_name,
-                "course_label_raw": course_label_raw,
-                "srl_cname": srl_cname,
-            }
-        )
-
-    logger.info("Parsed %d race_day_entries from past results HTML", len(entries))
-    return entries
+    seen = set()
+    uniq: List[str] = []
+    for c in sde_cnames:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
 
 
-if __name__ == "__main__":
-    import argparse
-    from pathlib import Path
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
-
-    ap = argparse.ArgumentParser(description="Parse race_day_entries from saved Past Results HTML.")
-    ap.add_argument("html_file", type=Path)
-    args = ap.parse_args()
-
-    html_text = args.html_file.read_text(encoding="utf-8", errors="ignore")
-    results = parse_race_day_entries(html_text)
-    for r in results:
-        print(r)
+def get_sde_cnames_from_srl(srl: str) -> List[str]:
+    """
+    Given one srl CNAME (pw01srl...), fetch its page and extract pw01sde... CNAMEs.
+    """
+    resp = http_post(BASE_URL, data={"cname": srl})
+    html = decode_shift_jis(resp.content)
+    soup = BeautifulSoup(html, "html.parser")
+    sde_cnames: List[str] = []
+    for a in soup.find_all("a", href=True):
+        if "pw01sde" in a["href"]:
+            sde_cnames.append(a["href"].split("CNAME=")[-1])
+    onclick_pat = re.compile(r"pw01sde[^'\" >]+")
+    for tag in soup.find_all(onclick=True):
+        onclick = tag.get("onclick", "")
+        for m2 in onclick_pat.finditer(onclick):
+            sde_cnames.append(m2.group(0))
+    seen = set()
+    uniq: List[str] = []
+    for c in sde_cnames:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
