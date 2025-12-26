@@ -17,12 +17,16 @@ DEFAULT_DB_PATH = Path(__file__).resolve().parents[1] / "data" / "keiba.db"
 
 SCHEMA_SQL = r"""
 -- drop existing (dev convenience)
+DROP VIEW IF EXISTS v_race_features;
+DROP VIEW IF EXISTS v_model_features;
 DROP TABLE IF EXISTS race_results;
 DROP TABLE IF EXISTS horses;
 DROP TABLE IF EXISTS jockeys;
 DROP TABLE IF EXISTS trainers;
 DROP TABLE IF EXISTS races;
 DROP TABLE IF EXISTS courses;
+DROP TABLE IF EXISTS payouts;
+DROP TABLE IF EXISTS odds_win;
 
 -- ================
 -- 1. courses master
@@ -122,7 +126,36 @@ CREATE TABLE IF NOT EXISTS race_results (
 );
 
 -- ================
--- 7. horses_stats (career stats, future-friendly)
+-- 7. payouts (payoff info)
+-- ================
+CREATE TABLE IF NOT EXISTS payouts (
+    race_id      TEXT NOT NULL,
+    bet_type     TEXT NOT NULL,
+    combination  TEXT NOT NULL,
+    payout_yen   INTEGER,
+    popularity   INTEGER,
+    odds         REAL,
+    line_no      INTEGER DEFAULT 0,
+    PRIMARY KEY (race_id, bet_type, combination, line_no),
+    FOREIGN KEY (race_id) REFERENCES races(race_id) ON DELETE CASCADE
+);
+
+-- ================
+-- 8. odds_win (full-field win odds per horse)
+-- ================
+CREATE TABLE IF NOT EXISTS odds_win (
+    race_id     TEXT NOT NULL,
+    horse_id    TEXT NOT NULL,
+    win_odds    REAL,
+    popularity  INTEGER,
+    PRIMARY KEY (race_id, horse_id),
+    FOREIGN KEY (race_id) REFERENCES races(race_id) ON DELETE CASCADE,
+    FOREIGN KEY (horse_id) REFERENCES horses(horse_id) ON DELETE CASCADE
+);
+
+-- ================
+-- ================
+-- 9. horses_stats (career stats, future-friendly)
 -- ================
 CREATE TABLE IF NOT EXISTS horses_stats (
     horse_id                 TEXT NOT NULL,
@@ -154,6 +187,8 @@ CREATE INDEX IF NOT EXISTS idx_results_horse ON race_results(horse_id);
 CREATE INDEX IF NOT EXISTS idx_results_jockey ON race_results(jockey_id);
 CREATE INDEX IF NOT EXISTS idx_results_trainer ON race_results(trainer_id);
 CREATE INDEX IF NOT EXISTS idx_results_prev_race ON race_results(prev_race_id);
+CREATE INDEX IF NOT EXISTS idx_payouts_race ON payouts(race_id);
+CREATE INDEX IF NOT EXISTS idx_odds_win_race ON odds_win(race_id);
 """
 
 VIEWS_SQL = r"""
@@ -206,6 +241,51 @@ JOIN horses  h ON rr.horse_id = h.horse_id
 LEFT JOIN courses  c ON r.course_id = c.course_id
 LEFT JOIN jockeys  j ON rr.jockey_id = j.jockey_id
 LEFT JOIN trainers t ON rr.trainer_id = t.trainer_id;
+
+-- Model-friendly view: essential features with odds_win fallback and NULL minimization
+CREATE VIEW IF NOT EXISTS v_model_features AS
+SELECT
+    r.race_id,
+    r.date AS race_date,
+    r.course_id,
+    c.venue_id,
+    r.race_no,
+    r.race_name,
+    r.distance,
+    r.surface,
+    r.weather,
+    r.going,
+    r.class,
+    r.age_cond,
+    r.sex_cond,
+    r.num_runners,
+    r.win_time_sec,
+    rr.horse_id,
+    h.horse_name,
+    h.sex AS horse_sex,
+    h.birth_year,
+    rr.bracket_no,
+    rr.horse_no,
+    rr.finish_rank,
+    rr.finish_status,
+    rr.finish_time_sec,
+    COALESCE(ow.win_odds, rr.odds) AS win_odds,
+    COALESCE(ow.popularity, rr.popularity) AS popularity,
+    rr.weight,
+    rr.body_weight,
+    rr.weight_diff,
+    rr.corner_pass_order,
+    rr.last_3f,
+    rr.margin_sec,
+    j.jockey_name,
+    t.trainer_name
+FROM race_results rr
+JOIN races   r ON rr.race_id = r.race_id
+JOIN horses  h ON rr.horse_id = h.horse_id
+LEFT JOIN courses  c ON r.course_id = c.course_id
+LEFT JOIN jockeys  j ON rr.jockey_id = j.jockey_id
+LEFT JOIN trainers t ON rr.trainer_id = t.trainer_id
+LEFT JOIN odds_win ow ON ow.race_id = rr.race_id AND ow.horse_id = rr.horse_id;
 """
 
 
@@ -213,11 +293,13 @@ def init_db(db_path: Path) -> None:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
-        conn.execute("PRAGMA foreign_keys = ON;")
+        # disable FK during drop/create to avoid dependency errors, then re-enable
+        conn.execute("PRAGMA foreign_keys = OFF;")
         with conn:  # transactional DDL
             conn.executescript(SCHEMA_SQL)
             conn.executescript(INDEXES_SQL)
             conn.executescript(VIEWS_SQL)
+            conn.execute("PRAGMA foreign_keys = ON;")
         print(f"[OK] Initialized v4 schema at: {db_path}")
     finally:
         conn.close()

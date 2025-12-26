@@ -34,13 +34,15 @@ def run_etl_for_one_race(race_id: str, db_path: str) -> None:
     horses_dict: Dict[str, Any]
     jockeys_dict: Dict[str, Any]
     trainers_dict: Dict[str, Any]
-    race_dict, results_list, horses_dict, jockeys_dict, trainers_dict = parse_race_html(html_path)
+    payouts_list: List[Dict[str, Any]]
+    race_dict, results_list, horses_dict, jockeys_dict, trainers_dict, payouts_list = parse_race_html(html_path)
     logger.info(
-        "Transform done: races=1, race_results=%d, horses=%d, jockeys=%d, trainers=%d",
+        "Transform done: races=1, race_results=%d, horses=%d, jockeys=%d, trainers=%d, payouts=%d",
         len(results_list),
         len(horses_dict),
         len(jockeys_dict),
         len(trainers_dict),
+        len(payouts_list),
     )
 
     load_race_to_db(
@@ -49,6 +51,7 @@ def run_etl_for_one_race(race_id: str, db_path: str) -> None:
         horses_dict,
         jockeys_dict,
         trainers_dict,
+        payouts_list,
         db_path=db_path,
     )
     logger.info("Load done: db_path=%s", db_path)

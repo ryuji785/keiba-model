@@ -22,8 +22,11 @@ ERROR_PHRASES = ["該当ページは存在しません", "ページが存在し�
 
 
 def _sleep_random() -> None:
-    time.sleep(1.0 + random.random() * 2.0)
-
+    time.sleep(5.0 + random.random() * 2.0)
+    # 約100回に1回、60秒の長いスリープを追加
+    # randint(1, 100) が 1 になる確率は 1/100
+    if random.randint(1, 100) == 1:
+        time.sleep(60.0)
 
 def cname_to_race_id(cname: str) -> str:
     """

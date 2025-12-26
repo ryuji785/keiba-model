@@ -178,12 +178,36 @@ def _upsert_race_results(conn: sqlite3.Connection, results: List[Dict[str, Any]]
         conn.execute(sql, params)
 
 
+def _insert_payouts(conn: sqlite3.Connection, payouts: List[Dict[str, Any]]) -> None:
+    if not payouts:
+        return
+    sql = """
+        INSERT OR REPLACE INTO payouts (
+            race_id, bet_type, combination, payout_yen, popularity, odds, line_no
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+    for p in payouts:
+        conn.execute(
+            sql,
+            (
+                p.get("race_id"),
+                p.get("bet_type"),
+                p.get("combination"),
+                p.get("payout_yen"),
+                p.get("popularity"),
+                p.get("odds"),
+                p.get("line_no", 0),
+            ),
+        )
+
+
 def load_race_to_db(
     race_dict: Dict[str, Any],
     results_list: List[Dict[str, Any]],
     horses_dict: Dict[str, Dict[str, Any]],
     jockeys_dict: Dict[str, Dict[str, Any]],
     trainers_dict: Dict[str, Dict[str, Any]],
+    payouts_list: List[Dict[str, Any]] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     logger.info("Start load_race_to_db race_id=%s", race_dict.get("race_id"))
@@ -196,6 +220,7 @@ def load_race_to_db(
         _insert_trainers(conn, trainers_dict)
         _upsert_race(conn, race_dict)
         _upsert_race_results(conn, results_list)
+        _insert_payouts(conn, payouts_list or [])
         conn.commit()
         logger.info("Finished load_race_to_db race_id=%s (results=%d)", race_dict.get("race_id"), len(results_list))
     except Exception:

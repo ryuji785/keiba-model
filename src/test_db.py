@@ -9,13 +9,9 @@ def main():
     cur = conn.cursor()
 
     # テーブル一覧
-    cur.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view');")    
+    cur.execute("SELECT name, type FROM sqlite_master WHERE type IN ('table','view');")
     rows = cur.fetchall()
-    cur.execute("SELECT race_id, horse_id, finish_rank, popularity FROM race_results WHERE race_id = 'R2025TOK11' ORDER BY finish_rank")
-    for row in cur.fetchall():
-        print(row)
-
-
+    
     conn.close()
 
     
